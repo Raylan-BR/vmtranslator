@@ -1,10 +1,14 @@
 package unit;
 
 import codewrite.CodeWriter;
+import parser.Parser;
 
 import org.junit.jupiter.api.Test;
+import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
 import java.io.StringWriter;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -27,29 +31,62 @@ class CodeWriterTest {
         return new int[] { ram[ram[0] - 1], ram[0] };
     }
 
+    // Traduz um programa VM completo usando Parser + CodeWriter.
+    private static String translate(String vm, String fileName) throws IOException {
+        StringWriter sw = new StringWriter();
+        try (Parser parser = new Parser(new StringReader(vm)); CodeWriter cw = new CodeWriter(sw)) {
+            cw.setFileName(fileName);
+            while (parser.hasMoreLines()) {
+                parser.advance();
+                switch (parser.commandType()) {
+                    case C_ARITHMETIC -> cw.writeArithmetic(parser.arg1());
+                    case C_PUSH -> cw.writePush(parser.arg1(), parser.arg2());
+                    case C_POP -> cw.writePop(parser.arg1(), parser.arg2());
+                }
+            }
+        }
+        return sw.toString();
+    }
+
+    private static short[] runOfficial(String path, int... init) throws IOException {
+        File vm = new File("test/validation/" + path);
+        short[] ram = new short[4096];
+        for (int i = 0; i < init.length; i++) ram[i] = (short) init[i];
+        execute(translate(Files.readString(vm.toPath()), vm.getName().replace(".vm", "")), ram);
+        return ram;
+    }
+
     // Mini-emulador Hack: suporta apenas as instruções que o CodeWriter emite.
     private static void execute(String asm, short[] ram) {
         List<String> prog = new ArrayList<>();
-        Map<String, Integer> labels = new HashMap<>();
+        Map<String, Integer> symbols = new HashMap<>(Map.of("SP", 0, "LCL", 1, "ARG", 2, "THIS", 3, "THAT", 4));
+        for (int i = 0; i < 16; i++) symbols.put("R" + i, i);
         for (String l : asm.split("\n")) {
-            if (l.startsWith("(")) labels.put(l.substring(1, l.length() - 1), prog.size());
+            if (l.startsWith("(")) symbols.put(l.substring(1, l.length() - 1), prog.size());
             else prog.add(l);
         }
+        int nextVar = 16;
         short a = 0, d = 0;
         for (int pc = 0; pc < prog.size(); pc++) {
             String ins = prog.get(pc);
             if (ins.startsWith("@")) {
                 String s = ins.substring(1);
-                a = (short) (s.equals("SP") ? 0 : labels.getOrDefault(s, -1));
+                if (s.matches("\\d+")) a = Short.parseShort(s);
+                else {
+                    if (!symbols.containsKey(s)) symbols.put(s, nextVar++);
+                    a = (short) (int) symbols.get(s);
+                }
                 continue;
             }
             String dest = "", comp = ins, jump = "";
             if (comp.contains(";")) { jump = comp.split(";")[1]; comp = comp.split(";")[0]; }
             if (comp.contains("=")) { dest = comp.split("=")[0]; comp = comp.split("=")[1]; }
-            short m = ram[a];
+            short m = a >= 0 && a < ram.length ? ram[a] : 0; // A pode conter uma constante, não um endereço
             short v = (short) switch (comp) {
                 case "M" -> m;
                 case "D" -> d;
+                case "A" -> a;
+                case "M+1" -> m + 1;
                 case "M-1" -> m - 1;
                 case "A-1" -> a - 1;
                 case "D+M" -> d + m;
@@ -113,6 +150,111 @@ class CodeWriterTest {
         List<String> labels = sw.toString().lines().filter(l -> l.startsWith("(")).toList();
         assertEquals(4, labels.size());
         assertEquals(4, labels.stream().distinct().count());
+    }
+
+    @Test
+    void pushEPopEmCadaSegmento() throws IOException {
+        String asm = translate("""
+            push constant 7
+            pop local 2
+            push constant 8
+            pop argument 1
+            push constant 3000
+            pop pointer 0
+            push constant 9
+            pop this 4
+            push constant 10
+            pop temp 7
+            push constant 11
+            pop static 5
+            push local 2
+            push argument 1
+            push this 4
+            push temp 7
+            push static 5
+            push pointer 0
+            """, "Foo");
+        // R13 só nos pops com endereço calculado (local, argument, this): 3 pops x 2 usos.
+        assertEquals(6, asm.lines().filter(l -> l.equals("@R13")).count());
+        short[] ram = new short[4096];
+        ram[0] = 256; ram[1] = 300; ram[2] = 400;
+        execute(asm, ram);
+        assertEquals(7, ram[302]);
+        assertEquals(8, ram[401]);
+        assertEquals(3000, ram[3]);
+        assertEquals(9, ram[3004]);
+        assertEquals(10, ram[12]);
+        assertEquals(11, ram[16]); // primeira variável Foo.5
+        assertTrue(asm.contains("@Foo.5"));
+        assertEquals(262, ram[0]);
+        assertArrayEquals(new short[] { 7, 8, 9, 10, 11, 3000 }, java.util.Arrays.copyOfRange(ram, 256, 262));
+    }
+
+    @Test
+    void segmentosInvalidosLancamExcecao() {
+        CodeWriter cw = new CodeWriter(new StringWriter());
+        assertThrows(IllegalArgumentException.class, () -> cw.writePop("constant", 0));
+        assertThrows(IllegalArgumentException.class, () -> cw.writePush("temp", 8));
+        assertThrows(IllegalArgumentException.class, () -> cw.writePush("pointer", 2));
+        assertThrows(IllegalArgumentException.class, () -> cw.writePush("heap", 0));
+        assertThrows(IllegalStateException.class, () -> cw.writePush("static", 0));
+    }
+
+    @Test
+    void naoInicializaPonteiros() throws IOException {
+        String asm = translate("push constant 1\npop local 0\n", "X");
+        assertFalse(asm.startsWith("@256"), "SP não deve ser inicializado nesta etapa");
+        // SP volta ao valor inicial e LCL não é tocado: nada é inicializado pelo tradutor.
+        short[] ram = new short[4096];
+        ram[0] = 256; ram[1] = 300;
+        execute(asm, ram);
+        assertEquals(256, ram[0]);
+        assertEquals(300, ram[1]);
+    }
+
+    // Valores esperados copiados dos .cmp; RAM inicial copiada dos .tst.
+    @Test
+    void validacaoOficialSimpleAdd() throws IOException {
+        short[] ram = runOfficial("StackArithmetic/SimpleAdd/SimpleAdd.vm", 256);
+        assertEquals(257, ram[0]);
+        assertEquals(15, ram[256]);
+    }
+
+    @Test
+    void validacaoOficialStackTest() throws IOException {
+        short[] ram = runOfficial("StackArithmetic/StackTest/StackTest.vm", 256);
+        assertEquals(266, ram[0]);
+        assertArrayEquals(new short[] { -1, 0, 0, 0, -1, 0, -1, 0, 0, -91 },
+            java.util.Arrays.copyOfRange(ram, 256, 266));
+    }
+
+    @Test
+    void validacaoOficialBasicTest() throws IOException {
+        short[] ram = runOfficial("MemoryAccess/BasicTest/BasicTest.vm", 256, 300, 400, 3000, 3010);
+        assertEquals(472, ram[256]);
+        assertEquals(10, ram[300]);
+        assertEquals(21, ram[401]);
+        assertEquals(22, ram[402]);
+        assertEquals(36, ram[3006]);
+        assertEquals(42, ram[3012]);
+        assertEquals(45, ram[3015]);
+        assertEquals(510, ram[11]);
+    }
+
+    @Test
+    void validacaoOficialPointerTest() throws IOException {
+        short[] ram = runOfficial("MemoryAccess/PointerTest/PointerTest.vm", 256);
+        assertEquals(6084, ram[256]);
+        assertEquals(3030, ram[3]);
+        assertEquals(3040, ram[4]);
+        assertEquals(32, ram[3032]);
+        assertEquals(46, ram[3046]);
+    }
+
+    @Test
+    void validacaoOficialStaticTest() throws IOException {
+        short[] ram = runOfficial("MemoryAccess/StaticTest/StaticTest.vm", 256);
+        assertEquals(1110, ram[256]);
     }
 
     @Test
