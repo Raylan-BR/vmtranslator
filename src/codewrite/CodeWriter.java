@@ -7,6 +7,7 @@ public class CodeWriter implements AutoCloseable {
 
     private final Writer out;
     private int labelCounter = 0;
+    private String fileName;
 
     public CodeWriter(Writer out) {
         this.out = out;
@@ -24,6 +25,65 @@ public class CodeWriter implements AutoCloseable {
             case "gt"  -> compare("JGT");
             case "lt"  -> compare("JLT");
             default -> throw new IllegalArgumentException("Comando aritmético inválido: " + cmd);
+        }
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
+    }
+
+    public void writePush(String segment, int index) throws IOException {
+        switch (segment) {
+            case "constant" -> emit("@" + index, "D=A");
+            case "local", "argument", "this", "that" ->
+                emit("@" + index, "D=A", "@" + baseOf(segment), "A=D+M", "D=M");
+            default -> emit("@" + fixedAddress(segment, index), "D=M");
+        }
+        emit("@SP", "A=M", "M=D", "@SP", "M=M+1");
+    }
+
+    public void writePop(String segment, int index) throws IOException {
+        switch (segment) {
+            case "local", "argument", "this", "that" -> emit(
+                // Endereço calculado vai para R13 porque D será usado pelo valor desempilhado.
+                "@" + index, "D=A", "@" + baseOf(segment), "D=D+M", "@R13", "M=D",
+                "@SP", "AM=M-1", "D=M", "@R13", "A=M", "M=D");
+            case "constant" -> throw new IllegalArgumentException("pop constant não é permitido");
+            default -> emit("@SP", "AM=M-1", "D=M", "@" + fixedAddress(segment, index), "M=D");
+        }
+    }
+
+    private static String baseOf(String segment) {
+        return switch (segment) {
+            case "local" -> "LCL";
+            case "argument" -> "ARG";
+            case "this" -> "THIS";
+            default -> "THAT";
+        };
+    }
+
+    // Segmentos com endereço conhecido em tempo de tradução: temp (R5-R12), pointer (THIS/THAT) e static.
+    private String fixedAddress(String segment, int index) {
+        switch (segment) {
+            case "temp" -> {
+                checkRange(segment, index, 7);
+                return String.valueOf(5 + index);
+            }
+            case "pointer" -> {
+                checkRange(segment, index, 1);
+                return index == 0 ? "THIS" : "THAT";
+            }
+            case "static" -> {
+                if (fileName == null) throw new IllegalStateException("Chame setFileName() antes de usar static.");
+                return fileName + "." + index;
+            }
+            default -> throw new IllegalArgumentException("Segmento inválido: " + segment);
+        }
+    }
+
+    private static void checkRange(String segment, int index, int max) {
+        if (index < 0 || index > max) {
+            throw new IllegalArgumentException("Índice fora do intervalo para " + segment + ": " + index);
         }
     }
 
