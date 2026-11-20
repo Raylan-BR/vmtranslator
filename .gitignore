@@ -1,2 +1,7 @@
 # classes compiladas
-target
+target/
+out/
+
+# saídas geradas pelo tradutor
+*.asm
+*.out
