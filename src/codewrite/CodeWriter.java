@@ -9,6 +9,10 @@ public class CodeWriter implements AutoCloseable {
     private int labelCounter = 0;
     private String fileName;
 
+    // Prefixo dos rótulos fora de funções; não colide com funções Jack, que sempre têm ponto (Classe.metodo).
+    private static final String NO_FUNCTION = "Global";
+    private String currentFunction = NO_FUNCTION;
+
     public CodeWriter(Writer out) {
         this.out = out;
     }
@@ -30,6 +34,28 @@ public class CodeWriter implements AutoCloseable {
 
     public void setFileName(String fileName) {
         this.fileName = fileName;
+    }
+
+    public void setFunctionName(String functionName) {
+        this.currentFunction = functionName;
+    }
+
+    public void writeLabel(String label) throws IOException {
+        emit("(" + scoped(label) + ")");
+    }
+
+    public void writeGoto(String label) throws IOException {
+        emit("@" + scoped(label), "0;JMP");
+    }
+
+    // Desempilha o topo e salta se ele for diferente de zero (qualquer valor != 0 é verdadeiro).
+    public void writeIf(String label) throws IOException {
+        emit("@SP", "AM=M-1", "D=M", "@" + scoped(label), "D;JNE");
+    }
+
+    // Rótulo no formato Funcao$LABEL, para que LOOP em funções diferentes não colida.
+    private String scoped(String label) {
+        return currentFunction + "$" + label;
     }
 
     public void writePush(String segment, int index) throws IOException {
