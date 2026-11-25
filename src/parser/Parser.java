@@ -6,12 +6,24 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Set;
 
 public class Parser implements AutoCloseable {
 
     private static final Set<String> ARITHMETIC_COMMANDS = Set.of(
         "add", "sub", "neg", "eq", "gt", "lt", "and", "or", "not"
+    );
+
+    private static final Map<String, CommandType> KEYWORD_COMMANDS = Map.of(
+        "push", CommandType.C_PUSH,
+        "pop", CommandType.C_POP,
+        "label", CommandType.C_LABEL,
+        "goto", CommandType.C_GOTO,
+        "if-goto", CommandType.C_IF,
+        "function", CommandType.C_FUNCTION,
+        "call", CommandType.C_CALL,
+        "return", CommandType.C_RETURN
     );
 
     private final BufferedReader reader;
@@ -48,21 +60,21 @@ public class Parser implements AutoCloseable {
         ensureCommandLoaded();
         String op = currentTokens[0];
 
-        if ("push".equals(op)) {
-            return CommandType.C_PUSH;
-        }
-        if ("pop".equals(op)) {
-            return CommandType.C_POP;
-        }
         if (ARITHMETIC_COMMANDS.contains(op)) {
             return CommandType.C_ARITHMETIC;
         }
-
-        throw new IllegalArgumentException("Comando VM inválido ou não suportado nesta etapa: " + op);
+        CommandType type = KEYWORD_COMMANDS.get(op);
+        if (type == null) {
+            throw new IllegalArgumentException("Comando VM inválido: " + op);
+        }
+        return type;
     }
 
     public String arg1() {
         CommandType type = commandType();
+        if (type == CommandType.C_RETURN) {
+            throw new IllegalStateException("arg1() não pode ser chamado para RETURN.");
+        }
         if (type == CommandType.C_ARITHMETIC) {
             return currentTokens[0];
         }
@@ -71,8 +83,9 @@ public class Parser implements AutoCloseable {
 
     public int arg2() {
         CommandType type = commandType();
-        if (type != CommandType.C_PUSH && type != CommandType.C_POP) {
-            throw new IllegalStateException("arg2() só pode ser chamado para comandos PUSH ou POP.");
+        if (type != CommandType.C_PUSH && type != CommandType.C_POP
+                && type != CommandType.C_FUNCTION && type != CommandType.C_CALL) {
+            throw new IllegalStateException("arg2() só pode ser chamado para PUSH, POP, FUNCTION ou CALL.");
         }
         return Integer.parseInt(currentTokens[2]);
     }
