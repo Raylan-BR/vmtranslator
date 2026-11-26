@@ -42,6 +42,9 @@ class CodeWriterTest {
                     case C_ARITHMETIC -> cw.writeArithmetic(parser.arg1());
                     case C_PUSH -> cw.writePush(parser.arg1(), parser.arg2());
                     case C_POP -> cw.writePop(parser.arg1(), parser.arg2());
+                    case C_LABEL -> cw.writeLabel(parser.arg1());
+                    case C_GOTO -> cw.writeGoto(parser.arg1());
+                    case C_IF -> cw.writeIf(parser.arg1());
                 }
             }
         }
@@ -67,7 +70,8 @@ class CodeWriterTest {
         }
         int nextVar = 16;
         short a = 0, d = 0;
-        for (int pc = 0; pc < prog.size(); pc++) {
+        for (int pc = 0, steps = 0; pc < prog.size(); pc++) {
+            if (++steps > 1_000_000) throw new IllegalStateException("possível loop infinito no Assembly gerado");
             String ins = prog.get(pc);
             if (ins.startsWith("@")) {
                 String s = ins.substring(1);
@@ -106,6 +110,8 @@ class CodeWriterTest {
                 case "JEQ" -> v == 0;
                 case "JGT" -> v > 0;
                 case "JLT" -> v < 0;
+                case "JNE" -> v != 0;
+                case "JMP" -> true;
                 case "" -> false;
                 default -> throw new IllegalStateException("jump não suportado: " + jump);
             };
@@ -215,14 +221,14 @@ class CodeWriterTest {
     // Valores esperados copiados dos .cmp; RAM inicial copiada dos .tst.
     @Test
     void validacaoOficialSimpleAdd() throws IOException {
-        short[] ram = runOfficial("StackArithmetic/SimpleAdd/SimpleAdd.vm", 256);
+        short[] ram = runOfficial("project7/StackArithmetic/SimpleAdd/SimpleAdd.vm", 256);
         assertEquals(257, ram[0]);
         assertEquals(15, ram[256]);
     }
 
     @Test
     void validacaoOficialStackTest() throws IOException {
-        short[] ram = runOfficial("StackArithmetic/StackTest/StackTest.vm", 256);
+        short[] ram = runOfficial("project7/StackArithmetic/StackTest/StackTest.vm", 256);
         assertEquals(266, ram[0]);
         assertArrayEquals(new short[] { -1, 0, 0, 0, -1, 0, -1, 0, 0, -91 },
             java.util.Arrays.copyOfRange(ram, 256, 266));
@@ -230,7 +236,7 @@ class CodeWriterTest {
 
     @Test
     void validacaoOficialBasicTest() throws IOException {
-        short[] ram = runOfficial("MemoryAccess/BasicTest/BasicTest.vm", 256, 300, 400, 3000, 3010);
+        short[] ram = runOfficial("project7/MemoryAccess/BasicTest/BasicTest.vm", 256, 300, 400, 3000, 3010);
         assertEquals(472, ram[256]);
         assertEquals(10, ram[300]);
         assertEquals(21, ram[401]);
@@ -243,7 +249,7 @@ class CodeWriterTest {
 
     @Test
     void validacaoOficialPointerTest() throws IOException {
-        short[] ram = runOfficial("MemoryAccess/PointerTest/PointerTest.vm", 256);
+        short[] ram = runOfficial("project7/MemoryAccess/PointerTest/PointerTest.vm", 256);
         assertEquals(6084, ram[256]);
         assertEquals(3030, ram[3]);
         assertEquals(3040, ram[4]);
@@ -253,12 +259,80 @@ class CodeWriterTest {
 
     @Test
     void validacaoOficialStaticTest() throws IOException {
-        short[] ram = runOfficial("MemoryAccess/StaticTest/StaticTest.vm", 256);
+        short[] ram = runOfficial("project7/MemoryAccess/StaticTest/StaticTest.vm", 256);
         assertEquals(1110, ram[256]);
     }
 
     @Test
     void comandoInvalidoLancaExcecao() {
         assertThrows(IllegalArgumentException.class, () -> new CodeWriter(new StringWriter()).writeArithmetic("mul"));
+    }
+
+    // --- Controle de fluxo (Project 08) ---
+
+    @Test
+    void rotulosForaDeFuncaoUsamPrefixoFixo() throws IOException {
+        StringWriter sw = new StringWriter();
+        try (CodeWriter cw = new CodeWriter(sw)) {
+            cw.writeLabel("LOOP");
+            cw.writeGoto("LOOP");
+        }
+        assertEquals("(Global$LOOP)\n@Global$LOOP\n0;JMP\n", sw.toString());
+    }
+
+    @Test
+    void rotulosDeFuncoesDiferentesNaoColidem() throws IOException {
+        StringWriter sw = new StringWriter();
+        try (CodeWriter cw = new CodeWriter(sw)) {
+            cw.setFunctionName("Main.fibonacci");
+            cw.writeLabel("LOOP");
+            cw.setFunctionName("Sys.init");
+            cw.writeLabel("LOOP");
+        }
+        assertEquals("(Main.fibonacci$LOOP)\n(Sys.init$LOOP)\n", sw.toString());
+    }
+
+    @Test
+    void ifGotoDesempilhaESaltaSomenteSeDiferenteDeZero() throws IOException {
+        // Se saltar, pula o "push constant 99"; a pilha termina com SP = 256 + o que sobrou.
+        String vm = """
+            push constant %d
+            if-goto SKIP
+            push constant 99
+            label SKIP
+            """;
+
+        short[] ram = new short[512];
+        ram[0] = 256;
+        execute(translate(vm.formatted(-1), "T"), ram); // verdadeiro (-1): salta
+        assertEquals(256, ram[0], "condição foi desempilhada e o push 99 foi pulado");
+
+        ram = new short[512];
+        ram[0] = 256;
+        execute(translate(vm.formatted(7), "T"), ram); // qualquer valor != 0 também salta
+        assertEquals(256, ram[0]);
+
+        ram = new short[512];
+        ram[0] = 256;
+        execute(translate(vm.formatted(0), "T"), ram); // falso (0): não salta
+        assertEquals(257, ram[0]);
+        assertEquals(99, ram[256]);
+    }
+
+    @Test
+    void validacaoOficialBasicLoop() throws IOException {
+        short[] ram = new short[4096];
+        ram[0] = 256; ram[1] = 300; ram[2] = 400; ram[400] = 3;
+        execute(translate(Files.readString(new File("test/validation/project8/BasicLoop/BasicLoop.vm").toPath()), "BasicLoop"), ram);
+        assertEquals(257, ram[0]);
+        assertEquals(6, ram[256]);
+    }
+
+    @Test
+    void validacaoOficialFibonacciSeries() throws IOException {
+        short[] ram = new short[4096];
+        ram[0] = 256; ram[1] = 300; ram[2] = 400; ram[400] = 6; ram[401] = 3000;
+        execute(translate(Files.readString(new File("test/validation/project8/FibonacciSeries/FibonacciSeries.vm").toPath()), "FibonacciSeries"), ram);
+        assertArrayEquals(new short[] { 0, 1, 1, 2, 3, 5 }, java.util.Arrays.copyOfRange(ram, 3000, 3006));
     }
 }
