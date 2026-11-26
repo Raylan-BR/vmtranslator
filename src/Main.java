@@ -5,21 +5,55 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class Main {
 
     public static void main(String[] args) throws IOException {
-        if (args.length != 1 || !args[0].endsWith(".vm")) {
-            System.err.println("Uso: Main <arquivo.vm>");
+        if (args.length != 1) {
+            System.err.println("Uso: Main <arquivo.vm | diretório>");
             System.exit(1);
         }
-        File vmFile = new File(args[0]);
-        String baseName = vmFile.getName().replaceAll("\\.vm$", "");
-        File asmFile = new File(vmFile.getParentFile(), baseName + ".asm");
+        File input = new File(args[0]);
+        if (!input.exists()) {
+            System.err.println("Caminho não encontrado: " + input.getPath());
+            System.exit(1);
+        }
 
-        try (Parser parser = new Parser(vmFile);
-             CodeWriter writer = new CodeWriter(new FileWriter(asmFile, StandardCharsets.UTF_8))) {
-            writer.setFileName(baseName);
+        File[] vmFiles;
+        File asmFile;
+        if (input.isDirectory()) {
+            vmFiles = input.listFiles((dir, name) -> name.endsWith(".vm"));
+            if (vmFiles == null || vmFiles.length == 0) {
+                System.err.println("Nenhum arquivo .vm em: " + input.getPath());
+                System.exit(1);
+            }
+            Arrays.sort(vmFiles); // ordem determinística, independente do sistema de arquivos
+            // Convenção do nand2tetris: Dir/ -> Dir/Dir.asm
+            asmFile = new File(input, input.getAbsoluteFile().getName() + ".asm");
+        } else {
+            if (!input.getName().endsWith(".vm")) {
+                System.err.println("O arquivo precisa ter extensão .vm: " + input.getPath());
+                System.exit(1);
+            }
+            vmFiles = new File[]{input};
+            asmFile = new File(input.getAbsoluteFile().getParentFile(), baseName(input) + ".asm");
+        }
+
+        // Sys.vm presente => programa completo, precisa do bootstrap (writeInit, ainda não implementado).
+        boolean needsBootstrap = Arrays.stream(vmFiles).anyMatch(f -> f.getName().equals("Sys.vm"));
+
+        try (CodeWriter writer = new CodeWriter(new FileWriter(asmFile, StandardCharsets.UTF_8))) {
+            for (File vmFile : vmFiles) {
+                writer.setFileName(baseName(vmFile)); // static vira <Arquivo>.<i>, separado por arquivo
+                translate(vmFile, writer);
+            }
+        }
+        System.out.println("Gerado: " + asmFile.getPath() + (needsBootstrap ? " (Sys.vm encontrado: requer bootstrap)" : ""));
+    }
+
+    private static void translate(File vmFile, CodeWriter writer) throws IOException {
+        try (Parser parser = new Parser(vmFile)) {
             while (parser.hasMoreLines()) {
                 parser.advance();
                 switch (parser.commandType()) {
@@ -32,6 +66,9 @@ public class Main {
                 }
             }
         }
-        System.out.println("Gerado: " + asmFile.getPath());
+    }
+
+    private static String baseName(File vmFile) {
+        return vmFile.getName().replaceAll("\\.vm$", "");
     }
 }
