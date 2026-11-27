@@ -524,4 +524,15 @@ class CodeWriterTest {
         assertEquals(3010, ram[3]);
         assertEquals(3020, ram[4]);
     }
+    @Test
+    void initInicializaSPEChamaSysInit() throws IOException {
+        StringWriter sw = new StringWriter();
+        try (CodeWriter cw = new CodeWriter(sw)) {
+            cw.writeInit();
+        }
+        String asm = sw.toString();
+
+        assertTrue(asm.startsWith("@256\nD=A\n@SP\nM=D\n"), "Deve inicializar SP com 256");
+        assertTrue(asm.contains("@Sys.init\n0;JMP\n"), "Deve saltar para Sys.init");
+    }
 }

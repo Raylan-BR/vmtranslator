@@ -129,6 +129,10 @@ public class CodeWriter implements AutoCloseable {
         // 6. goto RET
         emit("@R14", "A=M", "0;JMP");
     }
+    public void writeInit() throws IOException {
+        emit("@256", "D=A", "@SP", "M=D");
+        writeCall("Sys.init", 0);
+    }
     private static String baseOf(String segment) {
         return switch (segment) {
             case "local" -> "LCL";
