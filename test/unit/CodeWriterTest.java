@@ -45,6 +45,7 @@ class CodeWriterTest {
                     case C_LABEL -> cw.writeLabel(parser.arg1());
                     case C_GOTO -> cw.writeGoto(parser.arg1());
                     case C_IF -> cw.writeIf(parser.arg1());
+                    case C_FUNCTION -> cw.writeFunction(parser.arg1(), parser.arg2()); // <-- Adicione esta linha
                 }
             }
         }
@@ -334,5 +335,56 @@ class CodeWriterTest {
         ram[0] = 256; ram[1] = 300; ram[2] = 400; ram[400] = 6; ram[401] = 3000;
         execute(translate(Files.readString(new File("test/validation/project8/FibonacciSeries/FibonacciSeries.vm").toPath()), "FibonacciSeries"), ram);
         assertArrayEquals(new short[] { 0, 1, 1, 2, 3, 5 }, java.util.Arrays.copyOfRange(ram, 3000, 3006));
+    }
+
+    @Test
+    void functionComZeroVariaveisGeraApenasRotuloENaoAlteraPilha() throws IOException {
+        String asm = translate("function Sys.init 0\n", "Sys");
+        assertEquals("(Sys.init)\n", asm);
+
+        short[] ram = new short[512];
+        ram[0] = 256; // SP
+        ram[1] = 256; // LCL
+        ram[256] = 99; // lixo na memória para garantir que não será sobrescrito
+        execute(asm, ram);
+
+        assertEquals(256, ram[0], "SP não deve avançar quando nVars == 0");
+        assertEquals(99, ram[256], "Nenhuma posição deve ser zerada quando nVars == 0");
+    }
+
+    @Test
+    void functionInicializaVariaveisLocaisComZero() throws IOException {
+        String asm = translate("function Main.soma 3\n", "Main");
+        assertTrue(asm.startsWith("(Main.soma)\n"));
+
+        short[] ram = new short[512];
+        ram[0] = 300; // SP inicial (apontando para a base do novo frame)
+        ram[1] = 300; // LCL já posicionado pelo call antes de entrar na função
+        // Preenche com lixo para provar que o writeFunction realmente zera os 3 espaços
+        ram[300] = 77;
+        ram[301] = 88;
+        ram[302] = 99;
+        ram[303] = 55; // posição fora do escopo (não deve ser tocada)
+
+        execute(asm, ram);
+
+        assertEquals(303, ram[0], "SP deve avançar nVars posições");
+        assertArrayEquals(new short[] { 0, 0, 0 }, java.util.Arrays.copyOfRange(ram, 300, 303));
+        assertEquals(55, ram[303], "Não deve zerar além de nVars");
+    }
+
+    @Test
+    void functionAtualizaEscopoDeRotulosInternos() throws IOException {
+        String asm = translate("""
+            function ClassA.foo 1
+            label LOOP
+            goto LOOP
+            function ClassB.bar 0
+            label LOOP
+            """, "Test");
+
+        assertTrue(asm.contains("(ClassA.foo)\n"));
+        assertTrue(asm.contains("(ClassA.foo$LOOP)\n@ClassA.foo$LOOP\n0;JMP\n"));
+        assertTrue(asm.contains("(ClassB.bar)\n(ClassB.bar$LOOP)\n"));
     }
 }

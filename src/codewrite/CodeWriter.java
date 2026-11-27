@@ -78,7 +78,13 @@ public class CodeWriter implements AutoCloseable {
             default -> emit("@SP", "AM=M-1", "D=M", "@" + fixedAddress(segment, index), "M=D");
         }
     }
-
+    public void writeFunction(String functionName, int nVars) throws IOException {
+        setFunctionName(functionName);
+        emit("(" + functionName + ")");
+        for (int i = 0; i < nVars; i++) {
+            writePush("constant", 0);
+        }
+    }
     private static String baseOf(String segment) {
         return switch (segment) {
             case "local" -> "LCL";
