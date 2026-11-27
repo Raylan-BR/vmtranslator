@@ -45,7 +45,8 @@ class CodeWriterTest {
                     case C_LABEL -> cw.writeLabel(parser.arg1());
                     case C_GOTO -> cw.writeGoto(parser.arg1());
                     case C_IF -> cw.writeIf(parser.arg1());
-                    case C_FUNCTION -> cw.writeFunction(parser.arg1(), parser.arg2()); // <-- Adicione esta linha
+                    case C_FUNCTION -> cw.writeFunction(parser.arg1(), parser.arg2());
+                    case C_CALL -> cw.writeCall(parser.arg1(), parser.arg2());
                 }
             }
         }
@@ -97,6 +98,7 @@ class CodeWriterTest {
                 case "D+M" -> d + m;
                 case "M-D" -> m - d;
                 case "D&M" -> d & m;
+                case "D-A" -> d - a;
                 case "D|M" -> d | m;
                 case "-M" -> -m;
                 case "!M" -> ~m;
@@ -386,5 +388,91 @@ class CodeWriterTest {
         assertTrue(asm.contains("(ClassA.foo)\n"));
         assertTrue(asm.contains("(ClassA.foo$LOOP)\n@ClassA.foo$LOOP\n0;JMP\n"));
         assertTrue(asm.contains("(ClassB.bar)\n(ClassB.bar$LOOP)\n"));
+    }
+    
+    @Test
+    void callSalvaFrameReposicionaPonteirosESaltaParaFuncao() throws IOException {
+        // Simula 2 argumentos já empilhados em 256 e 257 (SP = 258).
+        // A função chamada escreve o resultado da soma dos 2 argumentos em ARG[0] e volta manualmente para o return-address.
+        String vm = """
+            call Math.soma 2
+            push constant 99
+            goto FIM
+            function Math.soma 0
+            push argument 0
+            push argument 1
+            add
+            pop argument 0
+            label FIM
+            """;
+
+        short[] ram = new short[512];
+        ram[0] = 258;  // SP (após 2 argumentos empilhados)
+        ram[1] = 300;  // LCL da chamadora
+        ram[2] = 400;  // ARG da chamadora
+        ram[3] = 3000; // THIS da chamadora
+        ram[4] = 4000; // THAT da chamadora
+        ram[256] = 10; // arg 0
+        ram[257] = 25; // arg 1
+
+        String asm = translate(vm, "Main");
+        execute(asm, ram);
+
+        // Verifica o frame salvo na pilha (endereços 258 a 262):
+        // ram[258] contém o endereço de retorno na ROM (> 0)
+        assertTrue(ram[258] > 0, "Endereço de retorno deve ter sido empilhado");
+        assertEquals(300, ram[259], "LCL antigo deve ser salvo");
+        assertEquals(400, ram[260], "ARG antigo deve ser salvo");
+        assertEquals(3000, ram[261], "THIS antigo deve ser salvo");
+        assertEquals(4000, ram[262], "THAT antigo deve ser salvo");
+
+        // Verifica os novos ponteiros da função chamada:
+        assertEquals(256, ram[2], "ARG deve apontar para o primeiro argumento (263 - 5 - 2 = 256)");
+        assertEquals(263, ram[1], "LCL deve apontar para o topo da pilha logo após o frame (263)");
+
+        // Verifica que o salto para Math.soma realmente ocorreu e leu ARG[0] + ARG[1] = 35
+        assertEquals(35, ram[256], "A função chamada deve ter acessado os argumentos via novo ARG");
+    }
+
+    @Test
+    void callSemArgumentosReposicionaARGParaMesmoEnderecoDeLCL() throws IOException {
+        String vm = """
+            call Sys.init 0
+            goto FIM
+            function Sys.init 0
+            label FIM
+            """;
+
+        short[] ram = new short[512];
+        ram[0] = 256; // SP inicial (0 argumentos)
+        ram[1] = 300;
+        ram[2] = 400;
+        ram[3] = 3000;
+        ram[4] = 4000;
+
+        execute(translate(vm, "Sys"), ram);
+
+        // Com 0 argumentos, frame ocupa 256..260, então SP = 261, LCL = 261 e ARG = 261 - 5 - 0 = 256
+        assertEquals(261, ram[0]);
+        assertEquals(261, ram[1], "LCL deve ser 261");
+        assertEquals(256, ram[2], "ARG deve ser 256 (base do frame)");
+    }
+
+    @Test
+    void multiplasChamadasGeramEnderecosDeRetornoExclusivos() throws IOException {
+        StringWriter sw = new StringWriter();
+        try (CodeWriter cw = new CodeWriter(sw)) {
+            cw.setFunctionName("Main.main");
+            cw.writeCall("Math.multiply", 2);
+            cw.writeCall("Math.multiply", 2);
+        }
+        String asm = sw.toString();
+
+        List<String> returnLabels = asm.lines()
+            .filter(l -> l.startsWith("(Main.main$ret."))
+            .toList();
+
+        assertEquals(2, returnLabels.size(), "Deve gerar 2 rótulos de retorno");
+        assertNotEquals(returnLabels.get(0), returnLabels.get(1), "Os rótulos de retorno devem ser únicos");
     }
 }

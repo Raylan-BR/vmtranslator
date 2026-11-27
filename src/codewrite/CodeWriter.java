@@ -85,6 +85,29 @@ public class CodeWriter implements AutoCloseable {
             writePush("constant", 0);
         }
     }
+    public void writeCall(String functionName, int nArgs) throws IOException {
+        String returnLabel = currentFunction + "$ret." + (labelCounter++);
+
+        // 1. Empilha o endereço de retorno (D=A pega o endereço da instrução, não M)
+        emit("@" + returnLabel, "D=A", "@SP", "A=M", "M=D", "@SP", "M=M+1");
+
+        // 2. Salva LCL, ARG, THIS e THAT da função chamadora na pilha
+        for (String segment : new String[] { "LCL", "ARG", "THIS", "THAT" }) {
+            emit("@" + segment, "D=M", "@SP", "A=M", "M=D", "@SP", "M=M+1");
+        }
+
+        // 3. Reposiciona ARG = SP - 5 - nArgs
+        emit("@SP", "D=M", "@" + (5 + nArgs), "D=D-A", "@ARG", "M=D");
+
+        // 4. Reposiciona LCL = SP
+        emit("@SP", "D=M", "@LCL", "M=D");
+
+        // 5. Transfere o controle para a função chamada
+        emit("@" + functionName, "0;JMP");
+
+        // 6. Declara o rótulo de retorno logo após o salto
+        emit("(" + returnLabel + ")");
+    }
     private static String baseOf(String segment) {
         return switch (segment) {
             case "local" -> "LCL";
