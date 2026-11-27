@@ -47,6 +47,7 @@ class CodeWriterTest {
                     case C_IF -> cw.writeIf(parser.arg1());
                     case C_FUNCTION -> cw.writeFunction(parser.arg1(), parser.arg2());
                     case C_CALL -> cw.writeCall(parser.arg1(), parser.arg2());
+                    case C_RETURN -> cw.writeReturn();
                 }
             }
         }
@@ -474,5 +475,53 @@ class CodeWriterTest {
 
         assertEquals(2, returnLabels.size(), "Deve gerar 2 rótulos de retorno");
         assertNotEquals(returnLabels.get(0), returnLabels.get(1), "Os rótulos de retorno devem ser únicos");
+    }
+    @Test
+    void cicloCompletoCallFunctionReturnFuncionaComZeroArgumentos() throws IOException {
+        String vm = """
+            function Main.constante 2
+            push constant 42
+            pop local 0
+            push local 0
+            return
+            function Main.inicio 0
+            call Main.constante 0
+            pop temp 0
+            """;
+
+        short[] ram = new short[512];
+        ram[0] = 256; // SP inicial
+        ram[1] = 256; // LCL inicial
+        ram[2] = 400; // ARG inicial
+        ram[3] = 3000; // THIS inicial
+        ram[4] = 4000; // THAT inicial
+
+        // Inicia a execução direto em Main.inicio
+        String asm = "@Main.inicio\n0;JMP\n" + translate(vm, "Main");
+        execute(asm, ram);
+
+        assertEquals(256, ram[0], "SP deve voltar para 256 após o pop temp 0");
+        assertEquals(42, ram[5], "temp 0 (RAM[5]) deve ter recebido o retorno 42");
+        assertEquals(256, ram[1], "LCL de Main.inicio deve ser restaurado");
+        assertEquals(400, ram[2], "ARG de Main.inicio deve ser restaurado");
+        assertEquals(3000, ram[3], "THIS de Main.inicio deve ser restaurado");
+        assertEquals(4000, ram[4], "THAT de Main.inicio deve ser restaurado");
+    }
+    @Test
+    void validacaoOficialSimpleFunction() throws IOException {
+        short[] ram = new short[4096];
+        ram[0] = 317; ram[1] = 317; ram[2] = 310; ram[3] = 3000; ram[4] = 4000;
+        ram[310] = 1234; ram[311] = 37;
+        ram[312] = 1000;
+        ram[313] = 305; ram[314] = 300; ram[315] = 3010; ram[316] = 3020;
+
+        execute(translate(Files.readString(new File("test/validation/project8/SimpleFunction/SimpleFunction.vm").toPath()), "SimpleFunction"), ram);
+
+        assertEquals(311, ram[0]);
+        assertEquals(1196, ram[310]);
+        assertEquals(305, ram[1]);
+        assertEquals(300, ram[2]);
+        assertEquals(3010, ram[3]);
+        assertEquals(3020, ram[4]);
     }
 }

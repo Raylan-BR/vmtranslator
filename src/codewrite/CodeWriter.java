@@ -108,6 +108,27 @@ public class CodeWriter implements AutoCloseable {
         // 6. Declara o rótulo de retorno logo após o salto
         emit("(" + returnLabel + ")");
     }
+    public void writeReturn() throws IOException {
+        // 1. FRAME = LCL (guarda em R13)
+        emit("@LCL", "D=M", "@R13", "M=D");
+
+        // 2. RET = *(FRAME - 5) (guarda em R14 antes que *ARG sobrescreva em chamadas com 0 args)
+        emit("@5", "A=D-A", "D=M", "@R14", "M=D");
+
+        // 3. *ARG = pop() (coloca o valor de retorno no topo da pilha da chamadora)
+        emit("@SP", "AM=M-1", "D=M", "@ARG", "A=M", "M=D");
+
+        // 4. SP = ARG + 1 (libera variáveis locais, frame e argumentos)
+        emit("@ARG", "D=M+1", "@SP", "M=D");
+
+        // 5. Restaura THAT, THIS, ARG e LCL decrementando R13 a cada passo
+        for (String segment : new String[] { "THAT", "THIS", "ARG", "LCL" }) {
+            emit("@R13", "AM=M-1", "D=M", "@" + segment, "M=D");
+        }
+
+        // 6. goto RET
+        emit("@R14", "A=M", "0;JMP");
+    }
     private static String baseOf(String segment) {
         return switch (segment) {
             case "local" -> "LCL";
